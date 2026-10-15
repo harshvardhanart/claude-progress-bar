@@ -1,5 +1,7 @@
 # task-progress
 
+![The task-progress bar in the Claude desktop app: 5/5 steps done in 13m 33s, 7.54M tokens used](docs/screenshot.png)
+
 A live progress bar for Claude Code. It sits above the message box and shows:
 
 - the current step and how many steps are done (`2/5 · 40%`)
