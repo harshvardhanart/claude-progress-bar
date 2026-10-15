@@ -1,0 +1,7 @@
+{
+  "name": "task-progress",
+  "version": "0.11.0",
+  "description": "A live progress bar with elapsed time and ETA above the prompt for Claude's task / todo list",
+  "author": { "name": "Harsh Vardhan" },
+  "types": "./types/index.d.ts"
+}

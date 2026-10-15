@@ -1,0 +1,6 @@
+{
+  "name": "harsh-mods",
+  "owner": { "name": "Harsh Vardhan" },
+  "description": "Harsh's personal Claude Code mods",
+  "plugins": [{ "name": "task-progress", "source": "./" }]
+}
