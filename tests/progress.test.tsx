@@ -63,22 +63,21 @@ test('limit formatting', async () => {
   expect(fmtIn(12 * 60_000)).toBe('12m')
 })
 
-test('the desktop bar shows both limits big and tokens small', async () => {
+test('the compact desktop bar shows both limits, with tokens and credit small', async () => {
   const s = summarize([{ id: '0', subject: 'Cut reel', status: 'in_progress', startedAt: 0 }], { listStart: 0, listEnd: null, now: 1_000 })
   const svg = glassCard(s, { input: 100, output: 900, cacheRead: 0, cacheWrite: 0, calls: 1 }, {
-    fiveHour: { total: 63, mine: 4.2, session: 1.1, resetsAt: 1_000 + 2 * 3600_000 + 14 * 60_000 },
-    weekly: { total: 41, mine: 1.8, session: 0.6, resetsAt: 1_000 + 3 * 86400_000 + 4 * 3600_000 },
+    fiveHour: { total: 63, mine: 4.2, session: 1.1, resetsAt: 0 },
+    weekly: { total: 41, mine: 1.8, session: 0.6, resetsAt: 0 },
   })
-  expect(svg).toContain('5-HOUR LIMIT')
-  expect(svg).toContain('WEEKLY LIMIT')
-  expect(svg).toContain('font-size="46" font-weight="800">4.2%')
-  expect(svg).toContain('font-size="46" font-weight="800">1.8%')
-  expect(svg).toContain('this chat </tspan><tspan font-weight="700" fill="#ffffff">1.1%')
-  expect(svg).toContain('account 63% used')
-  expect(svg).toContain('resets in 2h 14m')
-  expect(svg).toContain('resets in 3d 4h')
-  expect(svg).toMatch(/font-size="16"[^>]*>🪙 1\.0k tokens/)
-  expect(glassCard(s)).toContain("shows after Claude's first reply")
+  expect(svg).toContain('height="66"')
+  expect(svg).toContain('>5H</text>')
+  expect(svg).toContain('>WK</text>')
+  expect(svg).toContain('font-weight="800" fill="url(#lim5h)">4.2%</tspan>')
+  expect(svg).toContain('font-weight="800" fill="url(#limwk)">1.8%</tspan>')
+  expect(svg).toContain('chat 1.1% · acct 63%')
+  expect(svg).toContain('1.0k tok')
+  expect(svg).toContain('by Harsh Vardhan')
+  expect(glassCard(s)).toContain("Limits show after Claude's first reply")
 })
 
 type Drawn = { find: (q: { type: string; text?: RegExp }) => Promise<{ props: Record<string, unknown> } | undefined> }
@@ -111,7 +110,7 @@ test('token usage adds up across model calls and shows on the bar', async () => 
 
   const s = summarize([{ id: '0', subject: 'Cut reel', status: 'in_progress', startedAt: 0 }], { listStart: 0, listEnd: null, now: 65_000 })
   const svg = glassCard(s, u)
-  expect(svg).toContain('🪙 88k tokens · 1.6k out')
+  expect(svg).toContain('88k tok')
   expect(svg).toContain('⏱ 1m 05s')
   expect(svg).toContain('by Harsh Vardhan')
 })
@@ -154,9 +153,9 @@ test('a restart resets the timer and the bar, and a new message clears a finishe
   expect(await sees(ui, /⏱ 3s/)).toBe(true)
 
   await call([{ content: 'Cut reel', status: 'completed' }, { content: 'Export', status: 'completed' }])
-  expect(await sees(ui, /all done/)).toBe(true)
+  expect(await sees(ui, /done in/)).toBe(true)
   await $.prompt.submit({ text: 'make a thumbnail now' })
-  expect(await sees(ui, /all done/)).toBe(false)
+  expect(await sees(ui, /done in/)).toBe(false)
   expect(reminded.some(c => c.includes('mcp__task-progress__progress'))).toBe(true)
 
   // The next job shows up again from zero.
@@ -258,19 +257,26 @@ test('band shows progress and a live clock after the task tools run', async ($, 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'task-progress', surface, component: 'AbovePrompt', props: { hasSurvey: false } })
     expect(await sees(ui, /1\/2 · 50%/)).toBe(true)
-    expect(await sees(ui, /⏱ 35s · ~35s left/)).toBe(true)
+    expect(await sees(ui, /⏱ 35s/)).toBe(true)
+    expect(await sees(ui, /~35s left/)).toBe(true)
     expect(await sees(ui, /Add SFX/)).toBe(true)
     if (surface === 'desktop') expect(String((await ui.find({ type: 'Svg' }))?.props.source)).toContain('url(#fill)')
     await ui.unmount()
   }
 
   const ui = await $.ui.mount({ plugin: 'task-progress', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false } })
+  // Hide collapses to one slim line with a Show button; Show opens it again.
   await ui.press({ key: 'hide' })
   expect(await ui.find({ type: 'Text', text: /1\/2/ })).toBeUndefined()
-
-  // /progress brings it back.
-  await $.command.run({ command: 'progress', args: '' })
+  expect(await ui.find({ type: 'Text', text: /50%/ })).toBeDefined()
+  await ui.press({ key: 'show' })
   expect(await ui.find({ type: 'Text', text: /1\/2/ })).toBeDefined()
+
+  // /progress toggles; "/progress hide" and "/progress show" set it.
+  await $.command.run({ command: 'progress', args: '' })
+  expect(await ui.find({ key: 'show' })).toBeDefined()
+  await $.command.run({ command: 'progress', args: '' })
+  expect(await ui.find({ key: 'show' })).toBeUndefined()
   await $.command.run({ command: 'progress', args: 'hide' })
   expect(await ui.find({ type: 'Text', text: /1\/2/ })).toBeUndefined()
 
@@ -279,5 +285,5 @@ test('band shows progress and a live clock after the task tools run', async ($, 
   await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'completed' })
   await $.tool.call({ tool: 'TaskUpdate', taskId: '3', status: 'completed' })
   await clock.advance(60_000)
-  expect(await ui.find({ type: 'Text', text: /all done in 35s/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /done in 35s/ })).toBeDefined()
 })

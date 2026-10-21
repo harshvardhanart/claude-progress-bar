@@ -165,7 +165,7 @@ export function addUsage(
   }
 }
 
-const WIDTH = 20
+const WIDTH = 14
 
 export function bar(done: number, total: number, width = WIDTH): string {
   const filled = total === 0 ? 0 : Math.round((done / total) * width)
@@ -474,24 +474,26 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // /progress brings a hidden bar back; /progress hide hides it.
+  // /progress toggles the bar between full and collapsed; "/progress show" and "/progress hide" set it.
   on('command.run', { command: 'progress' }, async ($, e) => {
-    const wantsHide = /\bhide\b/i.test(e.args)
-    await update($, isHidden, () => wantsHide)
+    const arg = e.args.trim().toLowerCase()
+    const wasCollapsed = await read($, isHidden)
+    const collapse = arg === 'hide' ? true : arg === 'show' ? false : !wasCollapsed
+    await update($, isHidden, () => collapse)
+    if (collapse) return { text: 'Progress bar collapsed to one line. Click Show or type /progress to open it.' }
     const list = await read($, tasks)
-    if (wantsHide) return { text: 'Progress bar hidden. Type /progress to show it again.' }
     return {
       text:
         list.length === 0
-          ? 'Progress bar is on. It shows up as soon as Claude starts a multi-step job.'
-          : 'Progress bar is showing again.',
+          ? 'Progress bar is on. It shows up as soon as you send Claude a request.'
+          : 'Progress bar is open again.',
     }
   })
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'progress',
-      description: 'Show the progress bar again (or "/progress hide" to hide it)',
+      description: 'Open or collapse the progress bar (or "/progress show" / "/progress hide")',
     })
     await $.tool.register({
       name: 'progress',
@@ -529,7 +531,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const list = await read($, tasks)
-    if (e.props.hasSurvey || list.length === 0 || (await read($, isHidden))) {
+    if (e.props.hasSurvey || list.length === 0) {
       return next(e)
     }
 
@@ -539,71 +541,81 @@ export const register: Register = on => {
     const tokens = totalTokens(used)
     const limits = await read($, limitsAtom)
     const allDone = done === total
-    const hide = () => update($, isHidden, () => true)
+    const isCollapsed = await read($, isHidden)
+    const toggle = () => update($, isHidden, v => !v)
+    const ramp = allDone ? DONE_RAMP : RAMP
 
-    // Surfaces that draw SVG (desktop, mobile): a frosted-glass card.
+    // Collapsed: one slim line (a short bar, the count, this project's 5-hour use) and Show.
+    if (isCollapsed) {
+      const { Box, Button, Text } = $.ui.resolve(e)
+      const mini = 8
+      const filled = total === 0 ? 0 : Math.round((done / total) * mini)
+      return (
+        <Box flexDirection="row" alignItems="center">
+          {Array.from({ length: mini }, (_, i) => (
+            <Text key={`m${i}`} color={i < filled ? ramp[Math.floor((i / mini) * ramp.length)] : '#3b4252'}>
+              {i < filled ? '▰' : '▱'}
+            </Text>
+          ))}
+          <Text key="mini" dimColor>
+            {' '}
+            {allDone ? 'done' : `${pct}%`}
+            {limits.fiveHour ? ` · 5h ${fmtPct(limits.fiveHour.mine)}` : ''}{' '}
+          </Text>
+          <Button key="show" label="Show" dimColor onPress={toggle} />
+        </Box>
+      )
+    }
+
+    // Surfaces that draw SVG (desktop, mobile): the compact glowing bar.
     if (e.surface === 'desktop' || e.surface === 'mobile') {
       const { Box, Button, Svg } = $.ui.resolve(e)
       return (
         <Box flexDirection="row" alignItems="center">
           <Svg key="card" source={glassCard(s, used, limits)} alt={altText(s, used, limits)} />
-          <Button key="hide" label="Hide" dimColor onPress={hide} />
+          <Button key="hide" label="Hide" dimColor onPress={toggle} />
         </Box>
       )
     }
 
-    // Terminal: a gradient segmented bar.
+    // Terminal: one line, a gradient segmented bar with the limits beside it.
     const { Box, Button, Text } = $.ui.resolve(e)
     const label = allDone
-      ? `✓ all done in ${fmt(elapsed)} `
+      ? `✓ done in ${fmt(elapsed)} `
       : active
-        ? `▶ ${active.activeForm ?? active.subject}${activeFor !== undefined ? ` (${fmt(activeFor)})` : ''} `
+        ? `▶ ${clip(active.activeForm ?? active.subject, 40)}${activeFor !== undefined ? ` (${fmt(activeFor)})` : ''} `
         : ''
     const filled = total === 0 ? 0 : Math.round((done / total) * WIDTH)
-    const ramp = allDone ? DONE_RAMP : RAMP
-
     const limitText = (name: string, w: LimitWindow | undefined) =>
       w === undefined ? null : (
         <Text key={name}>
           <Text bold color="#a5b4fc">
             {name} {fmtPct(w.mine)}
           </Text>
-          <Text dimColor>
-            {' '}this project · {fmtPct(w.session)} this chat · account {fmtPct(w.total)}
-            {w.resetsAt !== undefined && s.now > 0 ? ` · resets in ${fmtIn(w.resetsAt - s.now)}` : ''}
-            {'   '}
-          </Text>
+          <Text dimColor> (chat {fmtPct(w.session)}) </Text>
         </Text>
       )
 
     return (
-      <Box flexDirection="column">
-        {limits.fiveHour || limits.weekly ? (
-          <Box>
-            {limitText('5-hour', limits.fiveHour)}
-            {limitText('Weekly', limits.weekly)}
-          </Box>
-        ) : null}
-        <Box>
+      <Box>
         {Array.from({ length: WIDTH }, (_, i) => (
           <Text key={`s${i}`} color={i < filled ? ramp[Math.floor((i / WIDTH) * ramp.length)] : '#3b4252'}>
             {i < filled ? '▰' : '▱'}
           </Text>
         ))}
         <Text bold> {done}/{total} · {pct}% </Text>
-        {allDone ? null : (
-          <Text dimColor>
-            ⏱ {fmt(elapsed)}
-            {eta !== undefined ? ` · ~${fmt(eta)} left` : ''}{' '}
-          </Text>
-        )}
-        {tokens > 0 ? <Text dimColor>🪙 {fmtTok(tokens)} tok </Text> : null}
+        {limitText('5h', limits.fiveHour)}
+        {limitText('wk', limits.weekly)}
+        <Text dimColor>
+          ⏱ {fmt(elapsed)}
+          {!allDone && eta !== undefined ? ` · ~${fmt(eta)} left` : ''}
+          {tokens > 0 ? ` · ${fmtTok(tokens)} tok` : ''}{' '}
+        </Text>
         <Text dimColor>{label}</Text>
         <Text dimColor italic>
           {CREDIT}{' '}
         </Text>
-        <Button key="hide" label="Hide" dimColor onPress={hide} />
-        </Box>
+        <Button key="hide" label="Hide" dimColor onPress={toggle} />
       </Box>
     )
   })
@@ -642,87 +654,75 @@ export function altText(s: Summary, u: Usage = NO_USAGE, l: Limits = {}): string
 const FIVE_HOUR_RAMP = ['#22d3ee', '#818cf8']
 const WEEKLY_RAMP = ['#a78bfa', '#e879f9']
 
-/** One big limit panel: label + reset time, the project's % large, this chat's % beside it, and a meter. */
-function limitPanel(id: string, x: number, width: number, top: number, label: string, ramp: string[], w: LimitWindow | undefined, now: number): string {
-  if (w === undefined) {
-    return `<text x="${x}" y="${top + 50}" font-size="19" fill="#a5b0d6" fill-opacity="0.7">${label}: shows after Claude's first reply</text>`
-  }
-  const meterY = top + 62
-  const meterH = 10
-  const px = (pct: number) => Math.round((Math.min(100, Math.max(0, pct)) / 100) * width)
+/** A small inline limit readout: label, tiny meter, the project's %, then chat and account % faint. */
+function limitChip(id: string, x: number, y: number, label: string, ramp: string[], w: LimitWindow | undefined): string {
+  if (w === undefined) return ''
+  const meterW = 44
+  const px = (pct: number) => Math.round((Math.min(100, Math.max(0, pct)) / 100) * meterW)
   const totalW = px(w.total)
-  const mineW = Math.min(totalW, Math.max(w.mine > 0 ? 6 : 0, px(w.mine)))
+  const mineW = Math.min(totalW, Math.max(w.mine > 0 ? 3 : 0, px(w.mine)))
   const isHigh = w.total >= 80
-  const resets = w.resetsAt !== undefined && now > 0 ? `resets in ${fmtIn(w.resetsAt - now)}` : ''
+  const mx = x + 26
   return `<defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="${ramp[0]}"/><stop offset="100%" stop-color="${ramp[1]}"/></linearGradient></defs>
-<text x="${x}" y="${top}" font-size="15" font-weight="700" letter-spacing="2" fill="#a5b0d6">${label}</text>
-<text x="${x + width}" y="${top}" font-size="15" text-anchor="end" fill="#a5b0d6" fill-opacity="0.8">${resets}</text>
-<text x="${x}" y="${top + 46}" fill="url(#${id})"><tspan font-size="46" font-weight="800">${fmtPct(w.mine)}</tspan><tspan dx="10" font-size="18" font-weight="500" fill="#c7d0f0">this project</tspan></text>
-<text x="${x + width}" y="${top + 46}" font-size="19" text-anchor="end" fill="#c7d0f0"><tspan fill-opacity="0.75">this chat </tspan><tspan font-weight="700" fill="#ffffff">${fmtPct(w.session)}</tspan></text>
-<rect x="${x}" y="${meterY}" width="${width}" height="${meterH}" rx="${meterH / 2}" fill="#ffffff" fill-opacity="0.08"/>
-<rect x="${x}" y="${meterY}" width="${totalW}" height="${meterH}" rx="${meterH / 2}" fill="${isHigh ? '#f59e0b' : '#ffffff'}" fill-opacity="${isHigh ? 0.55 : 0.22}"/>
-${mineW > 0 ? `<rect x="${x + totalW - mineW}" y="${meterY}" width="${mineW}" height="${meterH}" rx="${meterH / 2}" fill="url(#${id})"/>` : ''}
-<text x="${x}" y="${meterY + 30}" font-size="15" fill="#a5b0d6" fill-opacity="0.85">account ${fmtPct(w.total)} used</text>`
+<text x="${x}" y="${y}" font-size="11" font-weight="700" letter-spacing="0.4" fill="#8b93b5">${label}</text>
+<rect x="${mx}" y="${y - 7}" width="${meterW}" height="5" rx="2.5" fill="#ffffff" fill-opacity="0.08"/>
+<rect x="${mx}" y="${y - 7}" width="${totalW}" height="5" rx="2.5" fill="${isHigh ? '#f59e0b' : '#ffffff'}" fill-opacity="${isHigh ? 0.6 : 0.22}"/>
+${mineW > 0 ? `<rect x="${mx + totalW - mineW}" y="${y - 7}" width="${mineW}" height="5" rx="2.5" fill="url(#${id})"/>` : ''}
+<text x="${mx + meterW + 8}" y="${y}" fill="#8b93b5" font-size="12"><tspan font-size="16" font-weight="800" fill="url(#${id})">${fmtPct(w.mine)}</tspan><tspan dx="4" font-size="11" fill="#c7d0f0">proj</tspan><tspan dx="6">chat ${fmtPct(w.session)} · acct ${fmtPct(w.total)}</tspan></text>`
 }
 
 /**
- * The desktop bar, no background: step and count on top, the progress bar, then
- * the 5-hour and weekly limits big, then time, credit and tokens small.
+ * The desktop bar: compact, no background. Step and count on top, a thin glowing
+ * bar, then the 5-hour and weekly limits (this project), time, tokens and credit
+ * on one small line.
  */
 export function glassCard(s: Summary, u: Usage = NO_USAGE, l: Limits = {}): string {
-  const W = 900
-  const H = 236
+  const W = 820
+  const H = 66
   const allDone = s.done === s.total
-  const barY = 46
-  const barH = 14
-  const trackX = 4
-  const trackW = W - 8
-  const fillW = Math.max(s.pct > 0 ? barH : 0, Math.round((s.pct / 100) * trackW))
+  const barY = 27
+  const barH = 6
+  const trackX = 2
+  const trackW = W - 4
+  const fillW = Math.max(s.pct > 0 ? barH * 2 : 0, Math.round((s.pct / 100) * trackW))
   const stops = allDone ? DONE_RAMP : ['#22d3ee', '#818cf8', '#e879f9']
 
   const left = allDone
     ? `✓ All done in ${fmt(s.elapsed)}`
     : s.active
-      ? `${clip(s.active.activeForm ?? s.active.subject, 44)}${s.activeFor !== undefined ? ` · ${fmt(s.activeFor)}` : ''}`
+      ? `${clip(s.active.activeForm ?? s.active.subject, 60)}${s.activeFor !== undefined ? ` · ${fmt(s.activeFor)}` : ''}`
       : 'Getting started'
-  const time = allDone ? `⏱ ${fmt(s.elapsed)} total` : `⏱ ${fmt(s.elapsed)}${s.eta !== undefined ? ` · ~${fmt(s.eta)} left` : ''}`
+  const time = `⏱ ${fmt(s.elapsed)}`
+  const eta = !allDone && s.eta !== undefined ? ` · ~${fmt(s.eta)} left` : ''
   const tokens = totalTokens(u)
-  const tokenText = tokens > 0 ? `🪙 ${fmtTok(tokens)} tokens · ${fmtTok(u.output)} out` : '🪙 counting tokens…'
+  const right = `${time}${tokens > 0 ? `  ·  ${fmtTok(tokens)} tok` : ''}`
+  const hasLimits = l.fiveHour !== undefined || l.weekly !== undefined
 
   const gradStops = stops
     .map((c, i) => `<stop offset="${Math.round((i / (stops.length - 1)) * 100)}%" stop-color="${c}"/>`)
     .join('')
-  const mid = barY + barH / 2
-  const panelTop = 100
-  const panelW = (W - 8 - 40) / 2
+  const rowY = H - 8
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="Inter, 'Segoe UI', system-ui, sans-serif">
 <defs>
   <linearGradient id="fill" x1="0" y1="0" x2="1" y2="0">${gradStops}</linearGradient>
-  <linearGradient id="track" x1="0" y1="0" x2="0" y2="1">
-    <stop offset="0%" stop-color="#ffffff" stop-opacity="0.14"/>
-    <stop offset="100%" stop-color="#ffffff" stop-opacity="0.05"/>
-  </linearGradient>
   <linearGradient id="shine" x1="0" y1="0" x2="1" y2="0">
     <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
-    <stop offset="50%" stop-color="#ffffff" stop-opacity="0.6"/>
+    <stop offset="50%" stop-color="#ffffff" stop-opacity="0.65"/>
     <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
   </linearGradient>
-  <filter id="glow" x="-10%" y="-150%" width="120%" height="400%"><feGaussianBlur stdDeviation="6"/></filter>
+  <filter id="glow" x="-10%" y="-300%" width="120%" height="700%"><feGaussianBlur stdDeviation="4"/></filter>
   <clipPath id="bar"><rect x="${trackX}" y="${barY}" width="${fillW}" height="${barH}" rx="${barH / 2}"/></clipPath>
 </defs>
-<text x="${trackX}" y="31" font-size="26" font-weight="600" fill="#f1f5ff">${esc(left)}</text>
-<text x="${W - 4}" y="31" font-size="24" font-weight="800" text-anchor="end" fill="#ffffff">${s.done}/${s.total} · ${s.pct}%</text>
-<rect x="${trackX}" y="${barY}" width="${trackW}" height="${barH}" rx="${barH / 2}" fill="url(#track)" stroke="#ffffff" stroke-opacity="0.12"/>
-${fillW > 0 ? `<rect x="${trackX}" y="${barY}" width="${fillW}" height="${barH}" rx="${barH / 2}" fill="url(#fill)" filter="url(#glow)" opacity="0.8"/>
+<text x="${trackX}" y="17" font-size="14" font-weight="600" fill="#e6ebff">${esc(left)}</text>
+<text x="${W - 2}" y="17" font-size="14" font-weight="800" text-anchor="end" fill="#ffffff">${s.done}/${s.total}<tspan font-weight="500" fill="#8b93b5"> · ${s.pct}%${eta}</tspan></text>
+<rect x="${trackX}" y="${barY}" width="${trackW}" height="${barH}" rx="${barH / 2}" fill="#ffffff" fill-opacity="0.08"/>
+${fillW > 0 ? `<rect x="${trackX}" y="${barY}" width="${fillW}" height="${barH}" rx="${barH / 2}" fill="url(#fill)" filter="url(#glow)" opacity="0.7"/>
 <rect x="${trackX}" y="${barY}" width="${fillW}" height="${barH}" rx="${barH / 2}" fill="url(#fill)"/>
-<rect x="${trackX + 6}" y="${barY + 3}" width="${Math.max(0, fillW - 12)}" height="${barH / 3}" rx="${barH / 6}" fill="#ffffff" fill-opacity="0.3"/>
-<g clip-path="url(#bar)"><rect y="${barY}" width="160" height="${barH}" fill="url(#shine)"><animate attributeName="x" from="${trackX - 160}" to="${trackX + fillW}" dur="2.4s" repeatCount="indefinite"/></rect></g>` : ''}
-${fillW > 0 && !allDone ? `<circle cx="${trackX + fillW - barH / 2}" cy="${mid}" r="5" fill="#ffffff"><animate attributeName="r" values="4;7;4" dur="1.6s" repeatCount="indefinite"/><animate attributeName="fill-opacity" values="1;0.6;1" dur="1.6s" repeatCount="indefinite"/></circle>` : ''}
-${limitPanel('lim5h', trackX, panelW, panelTop, '5-HOUR LIMIT', FIVE_HOUR_RAMP, l.fiveHour, s.now)}
-${limitPanel('limwk', trackX + panelW + 40, panelW, panelTop, 'WEEKLY LIMIT', WEEKLY_RAMP, l.weekly, s.now)}
-<text x="${trackX}" y="${H - 8}" font-size="16" fill="#a5b0d6" fill-opacity="0.85">${esc(time)}</text>
-<text x="${W / 2}" y="${H - 8}" font-size="14" font-style="italic" letter-spacing="0.5" text-anchor="middle" fill="#ffffff" fill-opacity="0.38">${CREDIT}</text>
-<text x="${W - 4}" y="${H - 8}" font-size="16" text-anchor="end" fill="#fbbf24" fill-opacity="0.85">${esc(tokenText)}</text>
+<g clip-path="url(#bar)"><rect y="${barY}" width="120" height="${barH}" fill="url(#shine)"><animate attributeName="x" from="${trackX - 120}" to="${trackX + fillW}" dur="2.4s" repeatCount="indefinite"/></rect></g>` : ''}
+${fillW > 0 && !allDone ? `<circle cx="${trackX + fillW - barH / 2}" cy="${barY + barH / 2}" r="3.5" fill="#ffffff"><animate attributeName="r" values="3;5;3" dur="1.6s" repeatCount="indefinite"/></circle>` : ''}
+${hasLimits ? limitChip('lim5h', trackX, rowY, '5H', FIVE_HOUR_RAMP, l.fiveHour) : `<text x="${trackX}" y="${rowY}" font-size="12" fill="#8b93b5" fill-opacity="0.8">Limits show after Claude's first reply</text>`}
+${limitChip('limwk', trackX + 284, rowY, 'WK', WEEKLY_RAMP, l.weekly)}
+<text x="${W - 2}" y="${rowY}" font-size="12" text-anchor="end" fill="#8b93b5">${esc(right)}<tspan dx="10" font-size="11" font-style="italic" fill="#ffffff" fill-opacity="0.35">${CREDIT}</tspan></text>
 </svg>`
 }

@@ -1,6 +1,6 @@
 # task-progress
 
-![The task-progress bar in the Claude desktop app: 5/5 steps done in 13m 33s, 7.54M tokens used](docs/screenshot.png)
+![The task-progress bar: current step, 2/4 steps done, this project's 5-hour (4.2%) and weekly (12%) plan limit use, time and tokens](docs/screenshot.png)
 
 A live progress bar for Claude Code. It sits above the message box and shows:
 
@@ -44,7 +44,8 @@ claude plugin install task-progress@harsh-mods --scope user
 ## Use
 
 - The bar shows up by itself when you send a message.
-- **Hide** hides it; `/progress` brings it back; `/progress hide` hides it again.
+- **Hide** collapses it to one slim line; **Show** opens it again.
+- `/progress` toggles it too (`/progress show` / `/progress hide` to set it).
 
 ## Requirements
 
