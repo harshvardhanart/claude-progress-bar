@@ -24,7 +24,7 @@ On the desktop app it is a glowing gradient bar; in the terminal it is a segment
 In a Claude Code terminal session:
 
 ```
-/plugin install task-progress --marketplace harshvardhanart-del/claude-progress-bar
+/plugin install task-progress --marketplace harshvardhanart/claude-progress-bar
 ```
 
 Answer `y` to add the marketplace and pick the **user** scope so it works in every project.
