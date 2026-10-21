@@ -1,6 +1,85 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { addUsage, bar, fmt, fmtTok, glassCard, isFreshRun, summarize, totalTokens } from '../hooks/register'
+import {
+  addUsage,
+  applyReadings,
+  bar,
+  fmt,
+  fmtIn,
+  fmtPct,
+  fmtTok,
+  glassCard,
+  isFreshRun,
+  readStore,
+  summarize,
+  totalTokens,
+} from '../hooks/register'
+
+test('limit rises are credited to the project and the chat, and reset with the window', async () => {
+  const H5 = '2026-10-21T15:00:00Z'
+  const WK = '2026-10-27T00:00:00Z'
+  const read = (five: number, week: number, fiveReset = H5) => [
+    { kind: 'five_hour', percentUsed: five, resetsAt: fiveReset },
+    { kind: 'seven_day', percentUsed: week, resetsAt: WK },
+  ]
+
+  // A chat opens: notes the account's figures, credits nothing.
+  let r = applyReadings(readStore(undefined), {}, 'D:/reel', read(40, 20), false)
+  expect(r.limits.fiveHour).toEqual({ total: 40, mine: 0, session: 0, resetsAt: Date.parse(H5) })
+
+  // Two replies in this project use 3% then 2.5% of the 5-hour window.
+  r = applyReadings(r.store, r.chat, 'D:/reel', read(43, 21), true)
+  r = applyReadings(r.store, r.chat, 'D:/reel', read(45.5, 21.4), true)
+  expect(r.limits.fiveHour?.mine).toBe(5.5)
+  expect(r.limits.weekly?.mine).toBe(1.4)
+
+  // A new chat in the same project keeps the project total, starts its own count at 0.
+  let other = applyReadings(r.store, {}, 'D:/reel', read(45.5, 21.4), false)
+  other = applyReadings(other.store, other.chat, 'D:/reel', read(47, 21.6), true)
+  expect(other.limits.fiveHour?.mine).toBe(7)
+  expect(other.limits.fiveHour?.session).toBe(1.5)
+
+  // Another project only gets its own rise.
+  const thumb = applyReadings(other.store, {}, 'D:/thumb', read(49, 22), true)
+  expect(thumb.limits.fiveHour?.mine).toBe(2)
+  expect(thumb.limits.fiveHour?.total).toBe(49)
+
+  // A stale (lower) reading from a slower chat never steps the count back.
+  const stale = applyReadings(thumb.store, {}, 'D:/reel', read(46, 21.5), true)
+  expect(stale.limits.fiveHour?.total).toBe(49)
+
+  // The 5-hour window resets: the new window starts from what this reply used.
+  const reset = applyReadings(thumb.store, {}, 'D:/reel', read(4, 22.5, '2026-10-21T20:00:00Z'), true)
+  expect(reset.limits.fiveHour?.mine).toBe(4)
+  // The weekly window carries on: 1.6% earlier + this reply's 0.5% rise.
+  expect(reset.limits.weekly?.mine).toBe(2.1)
+})
+
+test('limit formatting', async () => {
+  expect(fmtPct(4.2)).toBe('4.2%')
+  expect(fmtPct(63.4)).toBe('63%')
+  expect(fmtIn(2 * 3600_000 + 14 * 60_000)).toBe('2h 14m')
+  expect(fmtIn(3 * 86400_000 + 4 * 3600_000)).toBe('3d 4h')
+  expect(fmtIn(12 * 60_000)).toBe('12m')
+})
+
+test('the desktop bar shows both limits big and tokens small', async () => {
+  const s = summarize([{ id: '0', subject: 'Cut reel', status: 'in_progress', startedAt: 0 }], { listStart: 0, listEnd: null, now: 1_000 })
+  const svg = glassCard(s, { input: 100, output: 900, cacheRead: 0, cacheWrite: 0, calls: 1 }, {
+    fiveHour: { total: 63, mine: 4.2, session: 1.1, resetsAt: 1_000 + 2 * 3600_000 + 14 * 60_000 },
+    weekly: { total: 41, mine: 1.8, session: 0.6, resetsAt: 1_000 + 3 * 86400_000 + 4 * 3600_000 },
+  })
+  expect(svg).toContain('5-HOUR LIMIT')
+  expect(svg).toContain('WEEKLY LIMIT')
+  expect(svg).toContain('font-size="46" font-weight="800">4.2%')
+  expect(svg).toContain('font-size="46" font-weight="800">1.8%')
+  expect(svg).toContain('this chat </tspan><tspan font-weight="700" fill="#ffffff">1.1%')
+  expect(svg).toContain('account 63% used')
+  expect(svg).toContain('resets in 2h 14m')
+  expect(svg).toContain('resets in 3d 4h')
+  expect(svg).toMatch(/font-size="16"[^>]*>🪙 1\.0k tokens/)
+  expect(glassCard(s)).toContain("shows after Claude's first reply")
+})
 
 type Drawn = { find: (q: { type: string; text?: RegExp }) => Promise<{ props: Record<string, unknown> } | undefined> }
 

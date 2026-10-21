@@ -5,8 +5,14 @@
 A live progress bar for Claude Code. It sits above the message box and shows:
 
 - the current step and how many steps are done (`2/5 · 40%`)
-- ⏱ elapsed time and an estimate of the time left
-- 🪙 tokens used so far for the current request
+- **how much of your 5-hour and weekly plan limits this project has used** (big), with this chat's share
+  and the account's total next to it, and when each limit resets
+- ⏱ elapsed time and an estimate of the time left, and 🪙 tokens used for the current request (small)
+
+The limit figures need a Claude subscription (Pro / Max); with an API key the bar just leaves them out.
+Claude only reports the whole account's % used, so a project's share is worked out from how much that %
+rises while the project's chats are working. Two chats running at the same moment can credit each other a
+little, so treat the per-project and per-chat numbers as close estimates.
 
 It appears for every request, updates as Claude works, and resets when a new job starts.
 On the desktop app it is a glowing gradient bar; in the terminal it is a segmented colour bar.
